@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Order Status – Live Demo</title>
+  <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      min-height: 100vh;
+      padding: 28px 20px;
+    }
+
+    /* ── Header ───────────────────────────────────────────────────────────── */
+    header {
+      display: flex; align-items: center; gap: 12px;
+      margin-bottom: 28px;
+    }
+    header .logo {
+      width: 40px; height: 40px; background: #6366f1;
+      border-radius: 10px; display: grid; place-items: center;
+      font-size: 20px;
+    }
+    header h1  { font-size: 1.35rem; font-weight: 700; color: #f8fafc; }
+    header p   { font-size: 0.8rem; color: #64748b; margin-top: 2px; }
+
+    /* ── Layout ───────────────────────────────────────────────────────────── */
+    .layout { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; max-width: 1080px; }
+    @media (max-width: 700px) { .layout { grid-template-columns: 1fr; } }
+
+    /* ── Card ─────────────────────────────────────────────────────────────── */
+    .card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 14px;
+      padding: 22px;
+    }
+    .card-title {
+      font-size: 0.7rem; font-weight: 700; letter-spacing: 0.08em;
+      text-transform: uppercase; color: #64748b; margin-bottom: 16px;
+    }
+
+    /* ── Form elements ────────────────────────────────────────────────────── */
+    label   { display: block; font-size: 0.8rem; color: #94a3b8; margin-bottom: 5px; }
+    input, select {
+      width: 100%; padding: 9px 12px;
+      background: #0f172a; border: 1px solid #334155; border-radius: 8px;
+      color: #e2e8f0; font-size: 0.875rem; margin-bottom: 12px;
+      outline: none; transition: border-color .2s;
+    }
+    input:focus, select:focus { border-color: #6366f1; }
+
+    button {
+      width: 100%; padding: 10px 16px;
+      background: #6366f1; color: #fff;
+      border: none; border-radius: 8px;
+      font-size: 0.875rem; font-weight: 600; cursor: pointer;
+      transition: background .2s, opacity .2s;
+    }
+    button:hover   { background: #4f46e5; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    button.danger  { background: #dc2626; }
+    button.danger:hover { background: #b91c1c; }
+    button.sm {
+      width: auto; padding: 6px 14px; font-size: 0.8rem; margin-top: 0;
+    }
+
+    /* ── Status badge ─────────────────────────────────────────────────────── */
+    .badge {
+      display: inline-block; padding: 2px 10px;
+      border-radius: 999px; font-size: 0.72rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: .04em;
+    }
+    .badge-pending   { background:#422006; color:#fb923c; }
+    .badge-confirmed { background:#1e3a5f; color:#60a5fa; }
+    .badge-shipped   { background:#1a2e1a; color:#4ade80; }
+    .badge-delivered { background:#1e293b; color:#a78bfa; border:1px solid #6d28d9; }
+
+    /* ── Connection status ────────────────────────────────────────────────── */
+    #conn-status {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 0.78rem; font-weight: 600; margin-bottom: 16px;
+      padding: 5px 12px; border-radius: 999px;
+      background: #1e293b; border: 1px solid #334155;
+    }
+    .dot {
+      width: 8px; height: 8px; border-radius: 50%; background: #64748b;
+      transition: background .3s;
+    }
+    .dot.connected    { background: #22c55e; box-shadow: 0 0 6px #22c55e; }
+    .dot.disconnected { background: #ef4444; }
+
+    /* ── Event log ────────────────────────────────────────────────────────── */
+    #log {
+      list-style: none;
+      max-height: 340px;
+      overflow-y: auto;
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    #log li {
+      background: #0f172a; border: 1px solid #334155;
+      border-radius: 8px; padding: 10px 14px; font-size: 0.8rem;
+    }
+    #log li .ev-time { color: #475569; font-size: 0.72rem; }
+    #log li .ev-name { color: #818cf8; font-weight: 700; margin: 2px 0; }
+    #log li .ev-body { color: #94a3b8; word-break: break-all; }
+    #log li.highlight { border-color: #6366f1; background: #1e1b4b; }
+
+    .empty { color: #475569; font-size: 0.82rem; text-align: center; padding: 24px 0; }
+
+    /* ── Token display ────────────────────────────────────────────────────── */
+    .token-box {
+      background: #0f172a; border: 1px solid #334155; border-radius: 8px;
+      padding: 8px 12px; font-size: 0.72rem; color: #94a3b8;
+      word-break: break-all; margin-bottom: 12px; min-height: 36px;
+    }
+    .row { display: flex; gap: 8px; align-items: flex-end; }
+    .row input { margin-bottom: 0; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">📦</div>
+  <div>
+    <h1>Order Status — Live Demo</h1>
+    <p>Socket.io real-time test client for the Product Catalog API</p>
+  </div>
+</header>
+
+<div class="layout">
+
+  <!-- ── LEFT COLUMN ─────────────────────────────────────────────────────── -->
+  <div style="display:flex;flex-direction:column;gap:20px;">
+
+    <!-- Auth Card -->
+    <div class="card">
+      <div class="card-title">1 · Authenticate</div>
+
+      <label>API Base URL</label>
+      <input id="base-url" value="http://localhost:3000/api/v1" />
+
+      <label>Email</label>
+      <input id="email" type="email" placeholder="user@example.com" />
+
+      <label>Password</label>
+      <input id="password" type="password" placeholder="••••••••" />
+
+      <div style="display:flex;gap:8px;margin-bottom:12px;">
+        <button onclick="doRegister()" id="btn-register">Register</button>
+        <button onclick="doLogin()"    id="btn-login">Login</button>
+      </div>
+
+      <label>Access Token (auto-filled)</label>
+      <div class="token-box" id="token-display">—</div>
+
+      <button onclick="doConnect()" id="btn-connect" disabled>Connect Socket</button>
+      <button onclick="doDisconnect()" id="btn-disconnect" class="danger" style="margin-top:8px;" disabled>Disconnect</button>
+    </div>
+
+    <!-- Place Order Card -->
+    <div class="card">
+      <div class="card-title">2 · Place an Order</div>
+
+      <label>Product ID</label>
+      <input id="product-id" placeholder="Paste a MongoDB product _id" />
+
+      <label>Quantity</label>
+      <input id="quantity" type="number" value="1" min="1" />
+
+      <button onclick="placeOrder()" id="btn-order" disabled>Place Order</button>
+
+      <label style="margin-top:12px;">Last Order ID</label>
+      <div class="token-box" id="order-id-display">—</div>
+    </div>
+
+    <!-- Admin: Update Status -->
+    <div class="card">
+      <div class="card-title">3 · Admin — Update Order Status</div>
+      <p style="font-size:.78rem;color:#64748b;margin-bottom:12px;">
+        Log in as an admin user to use this panel.
+      </p>
+
+      <label>Order ID</label>
+      <input id="admin-order-id" placeholder="Paste order _id" />
+
+      <label>New Status</label>
+      <select id="new-status">
+        <option value="confirmed">confirmed</option>
+        <option value="shipped">shipped</option>
+        <option value="delivered">delivered</option>
+        <option value="pending">pending</option>
+      </select>
+
+      <button onclick="updateStatus()" id="btn-status" disabled>Update Status</button>
+    </div>
+
+  </div>
+
+  <!-- ── RIGHT COLUMN ────────────────────────────────────────────────────── -->
+  <div class="card" style="display:flex;flex-direction:column;">
+    <div class="card-title">Real-Time Event Log</div>
+
+    <div id="conn-status">
+      <span class="dot" id="dot"></span>
+      <span id="conn-label">Disconnected</span>
+    </div>
+
+    <ul id="log">
+      <li class="empty" id="empty-msg">No events yet — connect and place an order.</li>
+    </ul>
+  </div>
+
+</div>
+
+<script>
+  const BASE = () => document.getElementById('base-url').value.replace(/\/$/, '');
+  let accessToken = null;
+  let socket      = null;
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  function setToken(token) {
+    accessToken = token;
+    const el = document.getElementById('token-display');
+    el.textContent = token ? token.substring(0, 60) + '…' : '—';
+    document.getElementById('btn-connect').disabled = !token;
+    document.getElementById('btn-order').disabled   = !token;
+    document.getElementById('btn-status').disabled  = !token;
+  }
+
+  function logEvent(name, data, highlight = false) {
+    const ul = document.getElementById('log');
+    const empty = document.getElementById('empty-msg');
+    if (empty) empty.remove();
+
+    const li   = document.createElement('li');
+    if (highlight) li.classList.add('highlight');
+
+    const time = new Date().toLocaleTimeString();
+    const body = typeof data === 'object' ? JSON.stringify(data, null, 2) : String(data);
+
+    // Badge for status events
+    let statusBadge = '';
+    if (data?.newStatus) {
+      statusBadge = `<span class="badge badge-${data.newStatus}">${data.newStatus}</span> `;
+    }
+
+    li.innerHTML = `
+      <div class="ev-time">${time}</div>
+      <div class="ev-name">${name}</div>
+      <div class="ev-body">${statusBadge}${body}</div>`;
+
+    ul.prepend(li);
+  }
+
+  function setConnectionUI(connected) {
+    document.getElementById('dot').className        = 'dot ' + (connected ? 'connected' : 'disconnected');
+    document.getElementById('conn-label').textContent = connected ? 'Connected' : 'Disconnected';
+    document.getElementById('btn-connect').disabled    = connected;
+    document.getElementById('btn-disconnect').disabled = !connected;
+  }
+
+  async function apiFetch(path, opts = {}) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`;
+    const res  = await fetch(BASE() + path, { headers, ...opts });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.message || `HTTP ${res.status}`);
+    return json;
+  }
+
+  // ── Auth ──────────────────────────────────────────────────────────────────
+  async function doRegister() {
+    try {
+      const data = await apiFetch('/auth/register', {
+        method: 'POST',
+        body: JSON.stringify({
+          name:     document.getElementById('email').value.split('@')[0],
+          email:    document.getElementById('email').value,
+          password: document.getElementById('password').value,
+        }),
+      });
+      setToken(data.data.accessToken);
+      logEvent('auth:register ✅', { user: data.data.user });
+      alert('Registered & logged in!');
+    } catch (err) { logEvent('auth:register ❌', err.message); alert(err.message); }
+  }
+
+  async function doLogin() {
+    try {
+      const data = await apiFetch('/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({
+          email:    document.getElementById('email').value,
+          password: document.getElementById('password').value,
+        }),
+      });
+      setToken(data.data.accessToken);
+      logEvent('auth:login ✅', { user: data.data.user });
+    } catch (err) { logEvent('auth:login ❌', err.message); alert(err.message); }
+  }
+
+  // ── Socket ────────────────────────────────────────────────────────────────
+  function doConnect() {
+    if (socket?.connected) return;
+
+    const wsUrl = BASE().replace('/api/v1', '');
+    socket = io(wsUrl, { auth: { token: accessToken } });
+
+    socket.on('connect',   () => { setConnectionUI(true);  logEvent('socket:connect ✅', { id: socket.id }); });
+    socket.on('disconnect', (reason) => { setConnectionUI(false); logEvent('socket:disconnect', reason); });
+    socket.on('connect_error', (err) => { logEvent('socket:error ❌', err.message); alert('Socket error: ' + err.message); });
+
+    socket.on('connected', (msg) => logEvent('server:connected', msg));
+
+    // ← THE MAIN EVENT ─────────────────────────────────────────────────────
+    socket.on('order:statusUpdated', (payload) => {
+      logEvent('🔔 order:statusUpdated', payload, true);
+    });
+  }
+
+  function doDisconnect() {
+    socket?.disconnect();
+    setConnectionUI(false);
+  }
+
+  // ── Place Order ───────────────────────────────────────────────────────────
+  async function placeOrder() {
+    try {
+      const data = await apiFetch('/orders', {
+        method: 'POST',
+        body: JSON.stringify({
+          items: [{
+            productId: document.getElementById('product-id').value.trim(),
+            quantity:  parseInt(document.getElementById('quantity').value),
+          }],
+        }),
+      });
+      const orderId = data.data._id;
+      document.getElementById('order-id-display').textContent = orderId;
+      document.getElementById('admin-order-id').value         = orderId;
+      logEvent('order:placed ✅', { orderId, total: data.data.totalAmount });
+    } catch (err) { logEvent('order:place ❌', err.message); alert(err.message); }
+  }
+
+  // ── Admin: Update Status ──────────────────────────────────────────────────
+  async function updateStatus() {
+    const orderId = document.getElementById('admin-order-id').value.trim();
+    const status  = document.getElementById('new-status').value;
+    if (!orderId) return alert('Enter an Order ID first.');
+    try {
+      await apiFetch(`/orders/${orderId}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status }),
+      });
+      logEvent('admin:statusUpdated ✅', { orderId, status });
+    } catch (err) { logEvent('admin:statusUpdate ❌', err.message); alert(err.message); }
+  }
+</script>
+</body>
+</html>
